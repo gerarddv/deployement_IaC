@@ -1,0 +1,98 @@
+- name: Setup Production and Staging Environments
+  hosts: all
+  become: yes
+  vars:
+    minikube_version: "v1.24.0"
+    docker_compose_version: "1.29.2"
+
+  tasks:
+
+    # Common setup: Update and install prerequisites
+    - name: Update APT package index
+      apt:
+        update_cache: yes
+
+    - name: Install prerequisite packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg
+        - lsb-release
+        - software-properties-common
+
+    # Install Docker (required for both environments)
+    - name: Add Docker GPG key
+      command: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+        update_cache: yes
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    # Environment-specific setup: Minikube for production
+    - name: Install Minikube dependencies
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - conntrack
+        - socat
+        - ebtables
+        - ethtool
+
+    - name: Download Minikube binary (production environment)
+      get_url:
+        url: "https://storage.googleapis.com/minikube/releases/{{ minikube_version }}/minikube-linux-amd64"
+        dest: /usr/local/bin/minikube
+        mode: '0755'
+      when: "'production' in group_names"
+
+    - name: Start Minikube cluster (production environment)
+      command: minikube start --driver=docker
+      when: "'production' in group_names"
+
+    # Environment-specific setup: Docker Compose for staging
+    - name: Download Docker Compose (staging environment)
+      get_url:
+        url: "https://github.com/docker/compose/releases/download/{{ docker_compose_version }}/docker-compose-$(uname -s)-$(uname -m)"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+      when: "'staging' in group_names"
+
+    - name: Verify Docker Compose installation
+      command: docker-compose --version
+      when: "'staging' in group_names"
+
+    - name: Start application containers with Docker Compose (staging environment)
+      copy:
+        content: |
+          version: '3'
+          services:
+            app:
+              image: nginx
+              ports:
+                - "8080:80"
+        dest: /home/{{ ansible_user }}/docker-compose.yml
+      when: "'staging' in group_names"
+
+    - name: Launch Docker Compose
+      command: docker-compose up -d
+      args:
+        chdir: /home/{{ ansible_user }}
+      when: "'staging' in group_names"
