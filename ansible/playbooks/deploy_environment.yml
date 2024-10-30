@@ -41,9 +41,15 @@
 
     - name: Install Docker
       apt:
-        name: docker-ce
+        name: "{{ item }}"
         state: present
-        update_cache: yes
+      loop:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - docker-compose
+        - docker-compose-plugin
+        - docker-buildx-plugin
 
     - name: Start and enable Docker service
       systemd:
