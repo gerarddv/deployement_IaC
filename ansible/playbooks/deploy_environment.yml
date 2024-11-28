@@ -4,9 +4,10 @@
   vars:
     minikube_version: "v1.24.0"
     docker_compose_version: "1.29.2"
+    node_exporter_version: "1.5.0"
+    ubuntu_release: "focal"
 
   tasks:
-
     # Common setup: Update and install prerequisites
     - name: Update APT package index
       apt:
@@ -14,42 +15,60 @@
 
     - name: Install prerequisite packages
       apt:
-        name: "{{ item }}"
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
         state: present
-      loop:
-        - apt-transport-https
-        - ca-certificates
-        - curl
-        - gnupg
-        - lsb-release
-        - software-properties-common
 
     # Install Docker (required for both environments)
-# Step 1: Download the Docker GPG key
-    - name: Download Docker GPG key
-      get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        dest: /usr/share/keyrings/docker-archive-keyring.gpg
+    # Step 1: Create directory for APT keyrings
+    - name: Create directory for apt keyrings
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    # Step 2: Download and dearmor the Docker GPG key
+    - name: Download and dearmor Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    # Step 3: Set permissions on Docker GPG key
+    - name: Set permissions on Docker GPG key
+      file:
+        path: /etc/apt/keyrings/docker.gpg
         mode: '0644'
 
-    # Step 2: Add the Docker repository using the GPG key
+    # Step 4: Add the Docker repository
     - name: Add Docker repository
-      apt_repository:
-        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-        state: present
-        filename: docker.list
+      copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        content: |
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ubuntu_release }} stable
+        mode: '0644'
 
+    # Step 5: Update APT package index
+    - name: Update APT package index
+      apt:
+        update_cache: yes
+        force_apt_get: yes
+
+    # Step 6: Install Docker packages
     - name: Install Docker
       apt:
-        name: "{{ item }}"
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
         state: present
-      loop:
-        - docker-ce
-        - docker-ce-cli
-        - containerd.io
-        - docker-compose
-        - docker-compose-plugin
-        - docker-buildx-plugin
 
     - name: Start and enable Docker service
       systemd:
@@ -57,16 +76,66 @@
         enabled: yes
         state: started
 
+    # Install Node Exporter
+    - name: Create a directory for Node Exporter
+      file:
+        path: /opt/node_exporter
+        state: directory
+        mode: '0755'
+
+    - name: Download Node Exporter binary
+      get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Extract Node Exporter binary
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /opt/node_exporter
+        remote_src: yes
+
+    - name: Move Node Exporter binary to /usr/local/bin
+      copy:
+        remote_src: yes
+        src: /opt/node_exporter/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter
+        dest: /usr/local/bin/node_exporter
+        mode: '0755'
+
+    - name: Create a systemd service file for Node Exporter
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      command: systemctl daemon-reload
+
+    - name: Enable and start Node Exporter service
+      systemd:
+        name: node_exporter
+        enabled: yes
+        state: started
+
     # Environment-specific setup: Minikube for production
     - name: Install Minikube dependencies
       apt:
-        name: "{{ item }}"
+        name:
+          - conntrack
+          - socat
+          - ebtables
+          - ethtool
         state: present
-      loop:
-        - conntrack
-        - socat
-        - ebtables
-        - ethtool
 
     - name: Download Minikube binary (production environment)
       get_url:
