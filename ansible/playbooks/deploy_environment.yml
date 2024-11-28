@@ -2,7 +2,7 @@
   hosts: all
   become: yes
   vars:
-    minikube_version: "v1.24.0"
+    k3s_version: "v1.31.3-rc1+k3s1"
     docker_compose_version: "1.29.2"
     node_exporter_version: "1.5.0"
     ubuntu_release: "focal"
@@ -127,54 +127,30 @@
         name: node_exporter
         enabled: yes
         state: started
-
-    # Environment-specific setup: Minikube for production
-    - name: Install Minikube dependencies
-      apt:
-        name:
-          - conntrack
-          - socat
-          - ebtables
-          - ethtool
-        state: present
-
-    - name: Download Minikube binary (production environment)
-      get_url:
-        url: "https://storage.googleapis.com/minikube/releases/{{ minikube_version }}/minikube-linux-amd64"
-        dest: /usr/local/bin/minikube
-        mode: '0755'
-      when: "'production' in group_names"
-
-    - name: Start Minikube cluster (production environment)
-      command: minikube start --driver=docker
-      when: "'production' in group_names"
-
-    # Environment-specific setup: Docker Compose for staging
-    - name: Download Docker Compose (staging environment)
-      get_url:
-        url: "https://github.com/docker/compose/releases/download/{{ docker_compose_version }}/docker-compose-$(uname -s)-$(uname -m)"
-        dest: /usr/local/bin/docker-compose
-        mode: '0755'
-      when: "'staging' in group_names"
-
-    - name: Verify Docker Compose installation
-      command: docker-compose --version
-      when: "'staging' in group_names"
-
-    - name: Start application containers with Docker Compose (staging environment)
-      copy:
-        content: |
-          version: '3'
-          services:
-            app:
-              image: nginx
-              ports:
-                - "8080:80"
-        dest: /home/{{ ansible_user }}/docker-compose.yml
-      when: "'staging' in group_names"
-
-    - name: Launch Docker Compose
-      command: docker-compose up -d
+    # Environment-specific setup: k3s for production
+    - name: Download and install k3s (production environment)
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -
       args:
-        chdir: /home/{{ ansible_user }}
-      when: "'staging' in group_names"
+        creates: /usr/local/bin/k3s
+
+    - name: Start k3s server (production environment)
+      systemd:
+        name: k3s
+        enabled: yes
+        state: started
+
+    - name: Download Kompose binary (production environment)
+      get_url:
+        url: "https://github.com/kubernetes/kompose/releases/download/v1.26.1/kompose-linux-amd64"
+        dest: "/usr/local/bin/kompose"
+        mode: '0755'
+
+    - name: Verify Kompose installation (production environment)
+      command: kompose version
+      register: kompose_version_output
+      failed_when: kompose_version_output.rc != 0
+
+    - name: Display Kompose version (production environment)
+      debug:
+        var: kompose_version_output.stdout
