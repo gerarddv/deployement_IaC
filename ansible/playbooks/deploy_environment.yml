@@ -67,6 +67,7 @@
           - docker-ce-cli
           - containerd.io
           - docker-buildx-plugin
+          - docker-compose
           - docker-compose-plugin
         state: present
 
